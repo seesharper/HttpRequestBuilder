@@ -1,7 +1,8 @@
 ﻿using System.Net.Http.Headers;
-using System.Text;
+using System.Net.Http.Json;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Microsoft.AspNetCore.Mvc;
 
 namespace HttpRequestBuilder;
 public class HttpRequestBuilder
@@ -26,7 +27,7 @@ public class HttpRequestBuilder
         return this;
     }
 
-    public HttpRequestBuilder AddQueryParameter(string name, object value)
+    public HttpRequestBuilder AddQueryParameter<T>(string name, T value) where T : notnull
     {
         string? stringValue = value.ToString();
         if (stringValue is null)
@@ -36,11 +37,17 @@ public class HttpRequestBuilder
         queryParameters[name] = stringValue.ToString();
         return this;
     }
-    public HttpRequestBuilder AddQueryParameters(string name, object[] values)
+    public HttpRequestBuilder AddQueryParameter<T>(string name, params T[] values) where T : notnull
     {
         var result = "";
         foreach (var item in values)
         {
+            string? stringValue = item.ToString();
+            if (stringValue is null)
+            {
+                throw new ArgumentException($"The parameter {nameof(values)} must contain elements where all return an non-null value from its `ToString()` method.");
+            }
+
             result += item.ToString() + ",";
         }
         result = result.Remove(result.Length - 1);
@@ -54,15 +61,15 @@ public class HttpRequestBuilder
         return this;
     }
 
-    public HttpRequestBuilder WithAcceptHeader(string acceptHeader)
+    public HttpRequestBuilder AddAcceptHeader(string acceptHeader)
     {
         requestMessage.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(acceptHeader));
         return this;
     }
 
-    public HttpRequestBuilder WithJsonContent<T>(T content) where T : class
+    public HttpRequestBuilder WithJsonContent<T>(T content, MediaTypeHeaderValue? mediaType = null, JsonSerializerOptions? options = null) where T : class
     {
-        requestMessage.Content = new JsonContent(content);
+        requestMessage.Content = JsonContent.Create(content, mediaType, options);
         return this;
     }
 
@@ -76,7 +83,7 @@ public class HttpRequestBuilder
 
         if (requestMessage.Headers.Accept.Count == 0)
         {
-            WithAcceptHeader(DefaultAcceptHeader);
+            AddAcceptHeader(DefaultAcceptHeader);
         }
 
         requestMessage.RequestUri = new Uri(requestUri, UriKind.Relative);
@@ -94,35 +101,67 @@ public class HttpRequestBuilder
             .Select(kvp => $"{encoder.Encode(kvp.Key)}={encoder.Encode(kvp.Value)}")
             .Aggregate((current, next) => $"{current}&{next}");
     }
-
-    private class JsonContent : StringContent
-    {
-        public JsonContent(object value)
-            : base(JsonSerializer.Serialize(value), Encoding.UTF8,
-                "application/json")
-        {
-        }
-    }
 }
 
-public static class HttpRequestBuilderExtensions
-{
-    public static HttpRequestBuilder WithTicketHeader(this HttpRequestBuilder builder, string ticket)
-    {
-        return builder.AddHeader("ticketheader", ticket);
-    }
-}
 public static class HttpResponseMessageResultExtensions
 {
-    public static async Task<T> ContentAs<T>(this HttpResponseMessage response) where T : class
+    public static async Task<T?> ContentAs<T>(this HttpResponseMessage response, JsonSerializerOptions? options = null, CancellationToken cancellationToken = default) where T : class
     {
-        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-        Stream data = await response.Content.ReadAsStreamAsync();
-        T? value = JsonSerializer.Deserialize<T>(data, options);
-        if (value is null)
+        try
         {
-            throw new InvalidOperationException("Failed to deserialize");
+            return await response.Content.ReadFromJsonAsync<T>(options, cancellationToken);
         }
-        return value;
+        catch (Exception ex)
+        {
+            var stringResponse = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new Exception($"There was a problem handling the request ('{response.RequestMessage?.RequestUri}') The status code was ({(int)response.StatusCode}) {response.StatusCode} and the raw response was ${stringResponse}", ex);
+        }
+    }
+}
+
+
+public static class HttpClientExtensions
+{
+    public static async Task<HttpResponseMessage> SendAndHandleRequest(this HttpClient client, HttpRequestMessage httpRequest, Func<HttpResponseMessage, bool>? isSuccessful = null, Action<ProblemDetails>? problemHandler = null, Func<HttpResponseMessage, Task>? exceptionHandler = null)
+    {
+        isSuccessful ??= (responseMessage) => responseMessage.IsSuccessStatusCode;
+        problemHandler ??= (problemDetails) => throw new Exception(problemDetails.Detail);
+        exceptionHandler ??= async (responseMessage) => await ReadAndThrowException(responseMessage);
+
+        var response = await client.SendAsync(httpRequest);
+
+        if (!isSuccessful(response))
+        {
+            ProblemDetails? problemDetails = await ReadProblemDetails(response);
+            if (problemDetails is not null)
+            {
+                problemHandler(problemDetails);
+            }
+            else
+            {
+                await exceptionHandler(response);
+            }
+        }
+
+        return response;
+    }
+
+    private static async Task ReadAndThrowException(HttpResponseMessage response)
+    {
+        var stringResponse = await response.Content.ReadAsStringAsync();
+        throw new Exception($"There was a problem handling the request ('{response.RequestMessage?.RequestUri}') The status code was ({(int)response.StatusCode}) {response.StatusCode} and the raw response was ${stringResponse}");
+    }
+
+
+    private static async Task<ProblemDetails?> ReadProblemDetails(HttpResponseMessage responseMessage)
+    {
+        try
+        {
+            return await responseMessage.Content.ReadFromJsonAsync<ProblemDetails>();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 }
