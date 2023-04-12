@@ -118,24 +118,45 @@ public class HttpRequestBuilderTests
         test.Name.Should().Be("SampleName");
     }
 
-    [Fact]
-    public async Task ShouldReadProblemDetails()
-    {
-        var httpClient = new HttpClient(new ProblemDetailsHttpMessageHandler());
-        await httpClient.SendAndHandleRequest(new HttpRequestMessage(HttpMethod.Get, "http://nrk.no"));
-    }
 
 
     [Fact]
     public async Task ShouldHandleInvalidContent()
     {
-        HttpResponseMessage responseMessage = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
-        responseMessage.Content = new StringContent("Rubbish");
+        HttpResponseMessage responseMessage = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent("Rubbish")
+        };
 
-        var test = await responseMessage.ContentAs<SampleContent>();
+        Func<Task> act = async () => await responseMessage.ContentAs<SampleContent>();
+        await act.Should().ThrowAsync<Exception>();
+    }
 
-        test.Id.Should().Be(42);
-        test.Name.Should().Be("SampleName");
+    [Fact]
+    public async Task ShouldHandleSuccess()
+    {
+        var httpClient = new HttpClient(new HttpResponseMessageHandler(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = JsonContent.Create(new SampleContent(42, "SampleName")) }));
+        var response = await httpClient.SendAndHandleRequest(new HttpRequestMessage(HttpMethod.Get, "http://nrk.no"));
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+
+    }
+
+
+    [Fact]
+    public async Task ShouldHandleError()
+    {
+        var httpClient = new HttpClient(new HttpResponseMessageHandler(new HttpResponseMessage(System.Net.HttpStatusCode.BadRequest) { Content = new StringContent("Rubbish") }));
+        Func<Task> act = async () => await httpClient.SendAndHandleRequest(new HttpRequestMessage(HttpMethod.Get, "http://nrk.no"));
+        await act.Should().ThrowAsync<Exception>();
+    }
+
+
+    [Fact]
+    public async Task ShouldReadProblemDetails()
+    {
+        var httpClient = new HttpClient(new ProblemDetailsHttpMessageHandler(new ProblemDetails() { Title = "MyTitle", Detail = "MyDetail", Status = 500, Extensions = { { "MyExtension", "MyExtensionValue" } } }));
+        Func<Task> act = async () => await httpClient.SendAndHandleRequest(new HttpRequestMessage(HttpMethod.Get, "http://nrk.no"));
+        await act.Should().ThrowAsync<ProblemDetailsException>().Where(e => e.Title == "MyTitle" && e.Detail == "MyDetail" && e.Status == 500 && e.RequestUrl == "http://nrk.no/" && e.Extensions.Count == 1);
     }
 }
 
@@ -144,13 +165,37 @@ public record SampleContent(long Id, string Name);
 
 public class ProblemDetailsHttpMessageHandler : HttpMessageHandler
 {
+    private readonly ProblemDetails _problemDetails;
+
+    public ProblemDetailsHttpMessageHandler(ProblemDetails problemDetails)
+    {
+        _problemDetails = problemDetails;
+    }
+
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var responseMessage = new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError)
         {
-            Content = JsonContent.Create(new ProblemDetails() { Title = "MyTitle", Detail = "MyDetails" })
+            Content = JsonContent.Create(_problemDetails),
+            RequestMessage = request
         };
         return Task.FromResult(responseMessage);
+    }
+}
+
+
+public class HttpResponseMessageHandler : HttpMessageHandler
+{
+    private readonly HttpResponseMessage _responseMessage;
+
+    public HttpResponseMessageHandler(HttpResponseMessage responseMessage)
+    {
+        _responseMessage = responseMessage;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        return Task.FromResult(_responseMessage);
     }
 }
 
