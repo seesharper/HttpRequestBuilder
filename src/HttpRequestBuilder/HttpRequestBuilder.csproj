@@ -1,5 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <Authors>Bernhard Richter</Authors>
+    <Description>Simplifies building and sending http requests </Description>
+    <Copyright>Bernhard Richter</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl></PackageProjectUrl>
+    <RepositoryUrl>https://github.com/seesharper/HttpRequestBuilder</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>dotnet http aspnet</PackageTags>
     <TargetFramework>net6.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
