@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace HttpRequestBuilder;
 
 /// <summary>
-/// 
+/// A builder class that can be used to build a <see cref="HttpRequestMessage"/> with a fluent interface. 
 /// </summary>
 public class HttpRequestBuilder
 {
